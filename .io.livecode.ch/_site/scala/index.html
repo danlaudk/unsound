@@ -83,13 +83,205 @@ if ("onhashchange" in window) {
 </script>
 
 <div class="live norun" id="ex1" data-mode="text/x-scala">
-object unsoundMini {
-  trait A { type L &gt;: Any}
-  def upcast(a: A, x: Any): a.L = x
-  val p: A { type L &lt;: Nothing } = null
-  def coerce(x: Any): Nothing = upcast(p, x)
-  coerce("Uh oh!")
+@ import $ivy.`org.typelevel::cats-core:0.9.0`, cats.{Eval, Foldable}, cats.implicits._, cats.data.State
+
+  println("...")
+object ForthError extends Enumeration {
+  type ForthErrorType = Value
+  val DivisionByZero, StackUnderflow, InvalidWord, UnknownWord = Value
 }
+import cats.{Eval, Foldable}
+import cats.data.State
+import cats.implicits._ // because cats built on 2.11 which didn't have Monad[Either]
+import ForthError.ForthErrorType
+
+  type Program = List[Word]
+  type Stack = List[Int]
+
+  type ForthErrorOr[A] = Either[ForthError.ForthErrorType, A]
+  type Result = ForthErrorOr[ForthState]
+
+  case class ForthState(stack: Stack,
+                        forthFunctions: Map[String, (Stack => Either[ForthErrorType,Stack])]) extends ForthEvaluatorState {
+    override def toString: String = stack.reverse.mkString(" ")
+  }
+
+
+
+sealed trait Word
+case class Definition(name: String, cmd: Seq[Word]) extends Word
+case class Number(value: Int) extends Word
+case class Func(cmd: String) extends Word
+
+
+trait ForthEvaluator  {
+  def eval(text: String): Either[ForthError.ForthErrorType, ForthEvaluatorState]
+}
+trait ForthEvaluatorState {
+  override def toString: String
+}
+  def parse(in: String): List[Word] = {
+    // regex help from github.com/daewon
+    val BeforeDefn = """(.*?)(?=:)(.*)""".r
+    val tokens = """(-?\d+)|([\p{L}\p{Sc}\-]+)|(\s[-+*/])|^[-+*/]""".r
+    val Defn = """^(?s)\s*(:.+?;)(.*)""".r
+    val Nmbr = """(\d+)""".r
+    val FnSeq = """([\p{L}\p{Sc}\-]+)""".r
+    val BinOp = """([-+*/]{1})""".r
+    val Symb = """[\p{L}\p{Sc}\-]+""".r
+
+    def parseForTokens(token: String): List[String] = token match {
+      case Defn(userDefined, after) => userDefined :: parseForTokens(after)
+      case BeforeDefn(before, after) => parseForTokens(before) ++ parseForTokens(after) // in case Defns are not first
+      case seq => tokens.findAllMatchIn(seq).flatMap(_.subgroups).filterNot(_ == null).toList    }
+
+    val parsed = parseForTokens(in.toUpperCase)
+
+    parsed.map(_.trim).map {
+      case Defn(userDefined, _) =>
+        val Array(name, cmd@_*) = userDefined.trim.tail.init.split(" ").filter(_.trim.nonEmpty)
+        if (Symb.unapplySeq(name).isEmpty) throw new IllegalArgumentException("userDefined name is Number")
+        else Definition(name, parse(cmd.mkString(" ")))
+
+      case Nmbr(n) => Number(n.toInt)
+      case FnSeq(cmd) => Func(cmd)
+      case BinOp(op) => Func(op)
+      case ex@_ => throw new RuntimeException(s"Unsupported Word: '${ex}'")
+    }
+  } // end def parse
+
+
+
+
+  val startFunctions: Map[String, (Stack => Either[ForthErrorType,Stack])] = {
+
+    //    def scalaOp(f: (Int => Int => Int))(s:Stack): Either[ForthErrorType, Stack] = s match {
+    //      case _ :: Nil            => Left(ForthError.StackUnderflow)
+    //      case x :: y :: _ => push(f(x)(y)) (s)
+    //    } don't think this will work in scala bc of methods
+
+    Map(
+      "+" -> {
+      case s: Stack if s.length &lt; 2 => Left(ForthError.StackUnderflow)
+      case x :: y :: z => Right((x + y) :: z)
+      case _ => Left(ForthError.StackUnderflow)
+    },
+      "-" -> {
+        case s: Stack if s.length &lt; 2 => Left(ForthError.StackUnderflow)
+        case x :: y :: z => Right((y - x) :: z)
+        case _ => Left(ForthError.StackUnderflow)
+      },
+      "/" -> {
+        case s: Stack if s.length &lt; 2 => Left(ForthError.StackUnderflow)
+        case x :: _ :: _ if x == 0 => Left(ForthError.DivisionByZero)
+        case x :: y :: z => Right((y / x) :: z)
+        case _ => Left(ForthError.StackUnderflow)
+      },
+      "*" -> {
+        case s: Stack if s.length &lt; 2 => Left(ForthError.StackUnderflow)
+        case x :: y :: z => Right((y * x) :: z)
+        case _ => Left(ForthError.StackUnderflow)
+      },
+      "DUP" -> {
+        case Nil => Left(ForthError.StackUnderflow)
+        case x :: y => Right(x :: x :: y)
+      },
+      "DROP" -> {
+        case Nil => Left(ForthError.StackUnderflow)
+        case _ :: y => Right(y)
+      },
+      "SWAP" -> {
+        case s: Stack if s.length &lt; 2 => Left(ForthError.StackUnderflow)
+        case x :: y :: z => Right(y :: x :: z)
+      },
+      "OVER" -> {
+        case s: Stack if s.length &lt; 2 => Left(ForthError.StackUnderflow)
+        case x :: y :: z => Right(y :: x :: y :: z)
+      }
+    )
+
+  }
+  val startState = new ForthState(List(), startFunctions)
+
+  def eval(text: String): Either[ForthErrorType, ForthEvaluatorState] = {
+    // two-steps without statemonad. 3-steps with. evalStateActions(parse(text) map wordToState, Right(startState)) // originally a 2-step version
+    evalToState(parse1(text)).runS(Right(startState)).value
+  }
+
+  def parse1(text: String): List[Word] = parse(text) // in companion obj // TODO parse returns Either monad
+
+  def evalToState(words: Seq[Word]): State[Result, Eval[Result]] =
+    if (words.length == 0)
+      for {
+        r &lt;- State.get[Result]
+      } yield Eval.later(r)
+    else {
+      for {
+        r &lt;- State.get[Result]
+        (stk, fns) = r match {
+          case Right(ForthState(stk, fns)) => (stk, fns)
+        }
+        _ &lt;- words.head match {
+          case Func(name) => State.set[Result](callFunctionIntoResult(fnInMap(name)(r))(r))
+          case Number(n) => State.set[Result](Right(ForthState(n :: stk, fns)))
+          case Definition(name, cmd) => State.set[Result](Right(ForthState(stk, fns.updated(name, updatedStackResultingFromFunction(fns)(cmd)(_).value))))
+        }
+        res &lt;- evalToState(words.tail)
+      } yield res
+    }
+
+  // fns used in wordtoState and in evalProgram
+  type Map_Functions = Map[String, (Stack => Either[ForthErrorType,Stack])]
+
+  def fnInMap(name: String)(r: Result): Option[Stack => Either[ForthErrorType,Stack]] = r.toOption.get.forthFunctions.get(name)
+
+  def callFunctionIntoResult(fn: Option[Stack => Either[ForthErrorType,Stack]])(r: Result): Result = {
+    def oldStackToNewState(st: Stack) = Right(ForthState(st, r.toOption.get.forthFunctions))
+
+    fn match {
+      case None => Left(ForthError.UnknownWord)
+      case Some(f) => {
+        r match {
+          case Right(state) => f(state.stack).flatMap(oldStackToNewState _)
+          case Left(x) => Left(x)
+        }
+      }
+    }
+  }
+
+
+  // callfunctionintoresult
+  def updatedStackResultingFromFunction(currentFunctions: Map_Functions)(cmd: Seq[Word])(s: Stack): Eval[Either[ForthErrorType,Stack]] =
+    evalToState(cmd).runS(Right(ForthState(s, currentFunctions))).map {
+      _ match {
+        case Right(ForthState(stack_of_functionResult, _)) => Right(stack_of_functionResult)
+      }
+    }
+  val strings = List(
+    "1 2 +"
+    ,"1 2 - 4 +",
+    "1 2 3 4 5",
+    "1 2 : dup-twice DUP DUP ;  dup-twice",
+    "1 DUP",
+    "12 5 + 4 +",
+    "12 5 + 4 -",
+    "12 5 - 4 -",
+    "2 4 *",
+    "3 4 -",
+    ": countup 1 2 3 ; countup",
+    ": dup-twice DUP DUP ; 1 dup-twice",
+    ": foo dup ; : foo dup dup ; 1 foo",
+    ": square dup * ;  10 square"
+    ,"dup"
+  )
+
+val out =  for {
+    s &lt;- strings
+    evaled = eval(s)
+    output = s + " ;leaves on stack: " + evaled.right.toOption.map(_.toString).getOrElse(evaled.left.get)
+  } yield output
+
+out.foreach(println(_))
 </div>
 
 <div class="live" id="run1" data-lib="ex1" data-mode="text/x-sh">
