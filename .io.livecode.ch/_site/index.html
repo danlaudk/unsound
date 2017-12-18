@@ -1,13 +1,9 @@
 {% extends "base_livecode.html" %}
 
-{% block title %}The Unsound Playground{% endblock %}
+{% block title %}Compiler written in Scala{% endblock %}
 
 {% block content %}
 
-<div style="float:right;margin-left:1em">
-<a href="https://raw.githubusercontent.com/namin/unsound/master/doc/unsound-oopsla16.pdf"><img style="border: 2px solid black" src="http://raw.githubusercontent.com/namin/unsound/master/doc/unsound-oopsla16.png"></img></a>
-<figcaption style="text-align:center">OOPSLA '16<hr/>Distinguished<br/>Artifact Award</figcaption>
-</div>
 
 <p>
 We, <a href="http://namin.net/">Nada Amin</a> and <a href="http://www.cs.cornell.edu/~ross/">Ross Tate</a>, broke the Java and Scala type systems!</br>
@@ -16,91 +12,208 @@ Read our paper <cite>Java and Scala's Type Systems are Unsound</cite> to learn h
 Come up with your own examples and use the save icon to update the URL to a permalink to your code &#8625;
 </p>
 
-<p><b><font size="4">Which language would you like to break?</font></b><br/>
-<font color="red">Java</font> / <a style="color:grey" href="unsound/scala">Scala</a></p>
 
-<ul style="list-style-type: none; margin-left: -1.5em">
-<li><a id="e0" href="#2e4392fc6392155ecfdb91c5fd183a01">Unsound.java in Java 8</a> (the first program we broke Java with, derived from <a style="color:grey" href="unsound/scala#a406d726d2fd1c7cf1b166db540fa1bf">legacy.scala</a>)</li>
-<li><a id="e1" href="#1425505f7c9f62770632bff6e520b866">Unsound.java in Java 9</a> (sometimes compilers incorrectly reject valid code)</li>
-<li><a id="e2" href="#cb32d4994710d626c877d2387712be99">Unsound9.java in Java 9</a> (we even broke Java in the future) </li>
-<li><a id="e3" href="#e544cf105b4d301bfb821ff1a64ba833">UnsoundSpec.java in Java 6</a> (incorrectly rejected unsound program that has been valid since Java 5 in 2004)</li>
-<li><a id="e4" href="#c27c67c524eade3bbe15b1993b0a846a">Nullless.java in Java 8</a> (this program has no occurence of <tt>null</tt>)</a></li>
-<li><a id="e5" href="#46b717349115fa58e2090cab119da61c">SingleParameters.java in Java 8</a> (every class and method in this program has exactly one parameter)</li>
-</ul>
 
-<script type="text/javascript">
-function rehash() {
- for (var i=0; i<=5; i++) {
-  var link = document.getElementById("e" + i);
-  link.style.color = "grey";
-  link.style["text-decoration"] = "underline";
- }
- var hash = window.location.hash;
- var index = hash.indexOf("#");
- if (index < 0) {
-  last = document.getElementById("e0");
-  last.style.color = "red";
-  last.style["text-decoration"] = "none";
- } else {
-  hash = hash.substring(index);
-  for (var i=0; i<=5; i++) {
-   var link = document.getElementById("e" + i);
-   var href = link.href;
-   href = href.substring(href.indexOf("#"));
-   if (href == hash) {
-    last = link;
-    last.style.color = "red";
-    last.style["text-decoration"] = "none";
-   }
-  }
- }
+<div class="live norun" id="ex1" data-mode="text/x-scala">
+@ import $ivy.`org.typelevel::cats-core:0.9.0`, cats.{Eval, Foldable}, cats.implicits._, cats.data.State
+
+  println("...")
+object ForthError extends Enumeration {
+  type ForthErrorType = Value
+  val DivisionByZero, StackUnderflow, InvalidWord, UnknownWord = Value
 }
-rehash();
-if ("onhashchange" in window) {
- window.onhashchange = rehash;
-} else {
- var last = null;
- function paintlinks() {
-  if (last) {
-   last.style.color = "grey";
-   last.style["text-decoration"] = "underline";
-  }
-  last = this;
-  last.style.color = "red";
-  last.style["text-decoration"] = "none";
- }
- for (var i=0; i<=5; i++) {
-  var link = document.getElementById("e" + i);
-  link.style.color = "grey";
-  if (link.addEventListener) {
-   link.addEventListener("click",paintlinks,false);
-  } else if (link.attachEvent) {
-   link.attachEvent("onclick",paintlinks);
-  } else {
-   link.onclick=rememberLink;
-  }
- }
-}
-</script>
+import cats.{Eval, Foldable}
+import cats.data.State
+import cats.implicits._ // because cats built on 2.11 which didn't have Monad[Either]
+import ForthError.ForthErrorType
 
-<div class="live norun" id="ex1">
-class Unsound {
-  static class Constrain&lt;A, B extends A&gt; {}
-  static class Bind&lt;A&gt; {
-    &lt;B extends A&gt;
-    A upcast(Constrain&lt;A,B&gt; constrain, B b) {
-      return b;
+  type Program = List[Word]
+  type Stack = List[Int]
+
+  type ForthErrorOr[A] = Either[ForthError.ForthErrorType, A]
+  type Result = ForthErrorOr[ForthState]
+
+  case class ForthState(stack: Stack,
+                        forthFunctions: Map[String, (Stack => Either[ForthErrorType,Stack])]) extends ForthEvaluatorState {
+    override def toString: String = stack.reverse.mkString(" ")
+  }
+
+
+
+sealed trait Word
+case class Definition(name: String, cmd: Seq[Word]) extends Word
+case class Number(value: Int) extends Word
+case class Func(cmd: String) extends Word
+
+
+trait ForthEvaluator  {
+  def eval(text: String): Either[ForthError.ForthErrorType, ForthEvaluatorState]
+}
+trait ForthEvaluatorState {
+  override def toString: String
+}
+  def parse(in: String): List[Word] = {
+    // regex help from github.com/daewon
+    val BeforeDefn = """(.*?)(?=:)(.*)""".r
+    val tokens = """(-?\d+)|([\p{L}\p{Sc}\-]+)|(\s[-+*/])|^[-+*/]""".r
+    val Defn = """^(?s)\s*(:.+?;)(.*)""".r
+    val Nmbr = """(\d+)""".r
+    val FnSeq = """([\p{L}\p{Sc}\-]+)""".r
+    val BinOp = """([-+*/]{1})""".r
+    val Symb = """[\p{L}\p{Sc}\-]+""".r
+
+    def parseForTokens(token: String): List[String] = token match {
+      case Defn(userDefined, after) => userDefined :: parseForTokens(after)
+      case BeforeDefn(before, after) => parseForTokens(before) ++ parseForTokens(after) // in case Defns are not first
+      case seq => tokens.findAllMatchIn(seq).flatMap(_.subgroups).filterNot(_ == null).toList    }
+
+    val parsed = parseForTokens(in.toUpperCase)
+
+    parsed.map(_.trim).map {
+      case Defn(userDefined, _) =>
+        val Array(name, cmd@_*) = userDefined.trim.tail.init.split(" ").filter(_.trim.nonEmpty)
+        if (Symb.unapplySeq(name).isEmpty) throw new IllegalArgumentException("userDefined name is Number")
+        else Definition(name, parse(cmd.mkString(" ")))
+
+      case Nmbr(n) => Number(n.toInt)
+      case FnSeq(cmd) => Func(cmd)
+      case BinOp(op) => Func(op)
+      case ex@_ => throw new RuntimeException(s"Unsupported Word: '${ex}'")
+    }
+  } // end def parse
+
+
+
+
+  val startFunctions: Map[String, (Stack => Either[ForthErrorType,Stack])] = {
+
+    //    def scalaOp(f: (Int => Int => Int))(s:Stack): Either[ForthErrorType, Stack] = s match {
+    //      case _ :: Nil            => Left(ForthError.StackUnderflow)
+    //      case x :: y :: _ => push(f(x)(y)) (s)
+    //    } don't think this will work in scala bc of methods
+
+    Map(
+      "+" -> {
+      case s: Stack if s.length &lt; 2 => Left(ForthError.StackUnderflow)
+      case x :: y :: z => Right((x + y) :: z)
+      case _ => Left(ForthError.StackUnderflow)
+    },
+      "-" -> {
+        case s: Stack if s.length &lt; 2 => Left(ForthError.StackUnderflow)
+        case x :: y :: z => Right((y - x) :: z)
+        case _ => Left(ForthError.StackUnderflow)
+      },
+      "/" -> {
+        case s: Stack if s.length &lt; 2 => Left(ForthError.StackUnderflow)
+        case x :: _ :: _ if x == 0 => Left(ForthError.DivisionByZero)
+        case x :: y :: z => Right((y / x) :: z)
+        case _ => Left(ForthError.StackUnderflow)
+      },
+      "*" -> {
+        case s: Stack if s.length &lt; 2 => Left(ForthError.StackUnderflow)
+        case x :: y :: z => Right((y * x) :: z)
+        case _ => Left(ForthError.StackUnderflow)
+      },
+      "DUP" -> {
+        case Nil => Left(ForthError.StackUnderflow)
+        case x :: y => Right(x :: x :: y)
+      },
+      "DROP" -> {
+        case Nil => Left(ForthError.StackUnderflow)
+        case _ :: y => Right(y)
+      },
+      "SWAP" -> {
+        case s: Stack if s.length &lt; 2 => Left(ForthError.StackUnderflow)
+        case x :: y :: z => Right(y :: x :: z)
+      },
+      "OVER" -> {
+        case s: Stack if s.length &lt; 2 => Left(ForthError.StackUnderflow)
+        case x :: y :: z => Right(y :: x :: y :: z)
+      }
+    )
+
+  }
+  val startState = new ForthState(List(), startFunctions)
+
+  def eval(text: String): Either[ForthErrorType, ForthEvaluatorState] = {
+    // two-steps without statemonad. 3-steps with. evalStateActions(parse(text) map wordToState, Right(startState)) // originally a 2-step version
+    evalToState(parse1(text)).runS(Right(startState)).value
+  }
+
+  def parse1(text: String): List[Word] = parse(text) // in companion obj // TODO parse returns Either monad
+
+  def evalToState(words: Seq[Word]): State[Result, Eval[Result]] =
+    if (words.length == 0)
+      for {
+        r &lt;- State.get[Result]
+      } yield Eval.later(r)
+    else {
+      for {
+        r &lt;- State.get[Result]
+        (stk, fns) = r match {
+          case Right(ForthState(stk, fns)) => (stk, fns)
+        }
+        _ &lt;- words.head match {
+          case Func(name) => State.set[Result](callFunctionIntoResult(fnInMap(name)(r))(r))
+          case Number(n) => State.set[Result](Right(ForthState(n :: stk, fns)))
+          case Definition(name, cmd) => State.set[Result](Right(ForthState(stk, fns.updated(name, updatedStackResultingFromFunction(fns)(cmd)(_).value))))
+        }
+        res &lt;- evalToState(words.tail)
+      } yield res
+    }
+
+  // fns used in wordtoState and in evalProgram
+  type Map_Functions = Map[String, (Stack => Either[ForthErrorType,Stack])]
+
+  def fnInMap(name: String)(r: Result): Option[Stack => Either[ForthErrorType,Stack]] = r.toOption.get.forthFunctions.get(name)
+
+  def callFunctionIntoResult(fn: Option[Stack => Either[ForthErrorType,Stack]])(r: Result): Result = {
+    def oldStackToNewState(st: Stack) = Right(ForthState(st, r.toOption.get.forthFunctions))
+
+    fn match {
+      case None => Left(ForthError.UnknownWord)
+      case Some(f) => {
+        r match {
+          case Right(state) => f(state.stack).flatMap(oldStackToNewState _)
+          case Left(x) => Left(x)
+        }
+      }
     }
   }
-  static &lt;T,U&gt; U coerce(T t) {
-    Constrain&lt;U,? super T&gt; constrain = null;
-    Bind&lt;U&gt; bind = new Bind&lt;U&gt;();
-    return bind.upcast(constrain, t);
-  }
-  public static void main(String[] args) {
-    String zero = Unsound.&lt;Integer,String&gt;coerce(0);
-  }
-}
+
+
+  // callfunctionintoresult
+  def updatedStackResultingFromFunction(currentFunctions: Map_Functions)(cmd: Seq[Word])(s: Stack): Eval[Either[ForthErrorType,Stack]] =
+    evalToState(cmd).runS(Right(ForthState(s, currentFunctions))).map {
+      _ match {
+        case Right(ForthState(stack_of_functionResult, _)) => Right(stack_of_functionResult)
+      }
+    }
+  val strings = List(
+    "1 2 +"
+    ,"1 2 - 4 +",
+    "1 2 3 4 5",
+    "1 2 : dup-twice DUP DUP ;  dup-twice",
+    "1 DUP",
+    "12 5 + 4 +",
+    "12 5 + 4 -",
+    "12 5 - 4 -",
+    "2 4 *",
+    "3 4 -",
+    ": countup 1 2 3 ; countup",
+    ": dup-twice DUP DUP ; 1 dup-twice",
+    ": foo dup ; : foo dup dup ; 1 foo",
+    ": square dup * ;  10 square"
+    ,"dup"
+  )
+
+val out =  for {
+    s &lt;- strings
+    evaled = eval(s)
+    output = s + " ;leaves on stack: " + evaled.right.toOption.map(_.toString).getOrElse(evaled.left.get)
+  } yield output
+
+out.foreach(println(_))
 </div>
 
 <div class="live" id="run1" data-lib="ex1" data-mode="text/x-sh">
@@ -108,18 +221,21 @@ class Unsound {
 set -e -v
 
 ### PICK VERSION
-export JAVA_HOME=/usr/lib/jvm/java-8-oracle
+export JAVA_HOME=/usr/lib/jvm/java-7-oracle
 export PATH=$JAVA_HOME/bin:$PATH
+export SCALA_HOME=/code/scala-2.11.8
+export PATH=$SCALA_HOME/bin:$PATH
 
 ### CHECK VERSION
 java -version
+scala -version
 
 ### COMPILE
-cat $1 >Unsound.java
-javac Unsound.java
+cat $1 >unsoundMini.scala
+scalac unsoundMini.scala
 
 ### RUN
-java Unsound
+scala unsoundMini
 </div>
 
 {% endblock %}
