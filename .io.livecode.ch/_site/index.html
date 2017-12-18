@@ -231,11 +231,10 @@ java -version
 scala -version
 
 ### COMPILE
-cat $1 >unsoundMini.scala
-scalac unsoundMini.scala
+cat $1 >forth.scala
 
-### RUN
-scala unsoundMini
+### download and RUN
+curl -L -o /tmp/amm https://git.io/vdNv2 &&  chmod +x /tmp/amm &&  /tmp/amm forth.sc
 </div>
 
 {% endblock %}
