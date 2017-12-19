@@ -6,12 +6,12 @@
 
 
 <p>
-A demo of a partially functioning Scala compiler for the  <a href="https://www.forth.com/resources/forth-programming-language/#12_Philosophy_and_Goals"><code>Forth language</code></a>, a stack-based language that has been used by NASA in spacecraft(<a href="https://en.wikipedia.org/wiki/Forth_(programming_language)#cite_ref-2"><i class="fa fa-link"></i></a>).
+A Scala compiler for the  <a href="https://www.forth.com/resources/forth-programming-language/#12_Philosophy_and_Goals"><code>Forth language</code></a>, a stack-based language that has been used by NASA in spacecraft(<a href="https://en.wikipedia.org/wiki/Forth_(programming_language)#cite_ref-2"><i class="fa fa-link"></i></a>).
 </p>
-
-<p> My original intent was to keep this close in design to assembler code I pair-programmed with at Recurse, but then I veered off, using it as an excuse to investigate : rolling my own state monad, using cats library, and even exploring the use of a free monad/interpreter pattern (but I couldn't work out how to compose State with Errors)
-
-The code below runs on ammonite, only in order to run on this io.livecode website, which initiates a download of cats library each time the code is run </p>
+<p>  My original intent was to keep this close in design to assembler code I pair-programmed with at Recurse, but then I veered off, using it as an excuse to investigate : rolling my own state monad, using cats library, and even exploring the use of a free monad/interpreter pattern (but I couldn't work out how to compose State with Either)
+</p>
+<p> Pressing run initiates a download of cats library each time you press run, and may display an ammonite error temporarily (for up to 30seconds) .  Code was pulled out of classes to fit on below .sc worksheet (bc on ammonite, only in order to run on this io.livecode website)
+</p>
 
 <div class="live norun" id="ex1" data-mode="text/x-scala">
 @ import $ivy.`org.typelevel::cats-core:0.9.0`, cats.{Eval, Foldable}, cats.implicits._, cats.data.State
@@ -37,13 +37,10 @@ import ForthError.ForthErrorType
     override def toString: String = stack.reverse.mkString(" ")
   }
 
-
-
 sealed trait Word
 case class Definition(name: String, cmd: Seq[Word]) extends Word
 case class Number(value: Int) extends Word
 case class Func(cmd: String) extends Word
-
 
 trait ForthEvaluator  {
   def eval(text: String): Either[ForthError.ForthErrorType, ForthEvaluatorState]
@@ -52,7 +49,6 @@ trait ForthEvaluatorState {
   override def toString: String
 }
   def parse(in: String): List[Word] = {
-    // regex help from github.com/daewon
     val BeforeDefn = """(.*?)(?=:)(.*)""".r
     val tokens = """(-?\d+)|([\p{L}\p{Sc}\-]+)|(\s[-+*/])|^[-+*/]""".r
     val Defn = """^(?s)\s*(:.+?;)(.*)""".r
@@ -81,16 +77,7 @@ trait ForthEvaluatorState {
     }
   } // end def parse
 
-
-
-
   val startFunctions: Map[String, (Stack => Either[ForthErrorType,Stack])] = {
-
-    //    def scalaOp(f: (Int => Int => Int))(s:Stack): Either[ForthErrorType, Stack] = s match {
-    //      case _ :: Nil            => Left(ForthError.StackUnderflow)
-    //      case x :: y :: _ => push(f(x)(y)) (s)
-    //    } don't think this will work in scala bc of methods
-
     Map(
       "+" -> {
       case s: Stack if s.length &lt; 2 => Left(ForthError.StackUnderflow)
@@ -130,8 +117,12 @@ trait ForthEvaluatorState {
         case x :: y :: z => Right(y :: x :: y :: z)
       }
     )
-
+    //    def scalaOp(f: (Int => Int => Int))(s:Stack): Either[ForthErrorType, Stack] = s match {
+    //      case _ :: Nil            => Left(ForthError.StackUnderflow)
+    //      case x :: y :: _ => push(f(x)(y)) (s)
+    //    } don't think this will work in scala bc of methods
   }
+  
   val startState = new ForthState(List(), startFunctions)
 
   def eval(text: String): Either[ForthErrorType, ForthEvaluatorState] = {
@@ -139,7 +130,7 @@ trait ForthEvaluatorState {
     evalToState(parse1(text)).runS(Right(startState)).value
   }
 
-  def parse1(text: String): List[Word] = parse(text) // in companion obj // TODO parse returns Either monad
+  def parse1(text: String): List[Word] = parse(text) // naming: parse originally in companion obj // TODO parse returns Either monad
 
   def evalToState(words: Seq[Word]): State[Result, Eval[Result]] =
     if (words.length == 0)
@@ -180,8 +171,7 @@ trait ForthEvaluatorState {
     }
   }
 
-
-  // callfunctionintoresult
+  // a function call updates a stack
   def updatedStackResultingFromFunction(currentFunctions: Map_Functions)(cmd: Seq[Word])(s: Stack): Eval[Either[ForthErrorType,Stack]] =
     evalToState(cmd).runS(Right(ForthState(s, currentFunctions))).map {
       _ match {
@@ -199,17 +189,17 @@ trait ForthEvaluatorState {
     "12 5 - 4 -",
     "2 4 *",
     "3 4 -",
-    ": countup 1 2 3 ; countup",
-    ": dup-twice DUP DUP ; 1 dup-twice",
-    ": foo dup ; : foo dup dup ; 1 foo",
+    ": countup 1 2 3 ; countup", // defines and runs a fn to place 1 2 3 on stack
+    ": dup-twice DUP DUP ; 1 dup-twice", 
+    ": foo dup ; : foo dup dup ; 1 foo", // redefines a function foo
     ": square dup * ;  10 square"
-    ,"dup"
+    ,"dup" // errors as nothing on the stack
   )
 
 val out =  for {
     s &lt;- strings
     evaled = eval(s)
-    output = s + " ;leaves on stack: " + evaled.right.toOption.map(_.toString).getOrElse(evaled.left.get)
+    output = s + " ;           leaves on stack: " + evaled.right.toOption.map(_.toString).getOrElse(evaled.left.get)
   } yield output
 
 out.foreach(println(_))
@@ -233,7 +223,7 @@ scala -version
 cat $1 >forth.scala
 
 ### download and RUN
-curl -L -o /tmp/amm https://git.io/vdNv2 &&  chmod +x /tmp/amm &&  /tmp/amm forth.sc
+curl -L -o /tmp/amm https://git.io/vdNvV &&  chmod +x /tmp/amm &&  /tmp/amm forth.scala
 </div>
 
 {% endblock %}
